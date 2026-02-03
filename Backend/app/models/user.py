@@ -10,5 +10,24 @@ class User(db.Model):
   password_hash = db.Column(db.String(255), nullable = False)
   created_at = db.Column(db.DateTime, default = datetime.utcnow)
 
+  # Relationships
+  memberships = db.relationship(
+    "Memberships",
+    back_populates = "user",
+    cascade = "all, delete-orphan"
+  )
+
+  settlements_sent = db.relationship(
+    "Settlement",
+    foreign_keys = "Settlement.from_user_id",
+    backref = "from_user",
+  )
+
+  settlements_received = db.relationship(
+    "Settlement",
+    foreign_keys = "settlement.to_user_id",
+    backref = "to_user",
+  )
+
   def __repr__(self):
     return f"<User {self.name}, {self.email}>"
