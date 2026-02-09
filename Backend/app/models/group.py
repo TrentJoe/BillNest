@@ -19,7 +19,7 @@ class Group(db.Model):
 
   creator = db.relationship("User")
 
-  settlemetns = db.relationship(
+  settlements = db.relationship(
     "Settlement",
     back_populates = "group",
     cascade = "all, delete-orphan"

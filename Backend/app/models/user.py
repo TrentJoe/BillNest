@@ -12,7 +12,7 @@ class User(db.Model):
 
   # Relationships
   memberships = db.relationship(
-    "Memberships",
+    "Membership",
     back_populates = "user",
     cascade = "all, delete-orphan"
   )
@@ -20,13 +20,13 @@ class User(db.Model):
   settlements_sent = db.relationship(
     "Settlement",
     foreign_keys = "Settlement.from_user_id",
-    backref = "from_user",
+    back_populates = "from_user",
   )
 
   settlements_received = db.relationship(
     "Settlement",
-    foreign_keys = "settlement.to_user_id",
-    backref = "to_user",
+    foreign_keys = "Settlement.to_user_id",
+    back_populates = "to_user",
   )
 
   def __repr__(self):

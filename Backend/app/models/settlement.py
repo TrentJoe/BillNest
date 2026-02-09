@@ -19,12 +19,12 @@ class Settlement(db.Model):
   created_at = db.Column(db.DateTime, default = datetime.utcnow)
 
   # Relationships
-  from_user = db.relationship("User", foreign_keys = [from_user_id])
-  to_user = db.relationship("User", foreign_keys = [to_user_id])
+  from_user = db.relationship("User", foreign_keys = [from_user_id], back_populates = "settlements_sent")
+  to_user = db.relationship("User", foreign_keys = [to_user_id], back_populates = "settlements_received")
 
   group = db.relationship("Group")
 
-  
+
 
   def __repr__(self):
     return f"<Settlement from User {self.from_user_id} to User {self.to_user_id} in Group {self.group_id}, Status: {self.status}>"
