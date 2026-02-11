@@ -1,6 +1,7 @@
 from collections import defaultdict
 from decimal import Decimal
 
+
 from app.models import Group, Expense, ExpenseSplit, Settlement
 
 def calculate_group_balances(group):
@@ -53,4 +54,67 @@ def calculate_group_balances(group):
 
   return balances
 
+
+  
+def get_group_obligations(group):
+  """
+    Returns:
+        {
+            debtor_id: {
+                creditor_id: Decimal(amount)
+            }
+        }
+    """
+  obligations = defaultdict(lambda: defaultdict(lambda:Decimal("0.00")))
+
+# Process expenses and splits to determine who owes whom
+for expense in group.expenses:
+  payer_id = expense.created_by
+
+  for split in expense.splits:
+    debtor_id = split.user_id
+    amount = split.amount_owed
+
+    if debtor_id == payer_id:
+      continue  # Skip if the debtor is the same as the payer
+
+    obligations[debtor_id][payer_id] += amount
+  
+# Process confirmed settlements
+
+for settlement in group.settlements:
+  if settlement.status != "confirmed":
+    continue
+
+  debtor_id = settlement.from_user_id
+  creditor_id = settlement.to_user_id
+  amount = settlement.amount
+
+  obligations[debtor_id][creditor_id] -= amount
+  
+  # Clean up zero or negative obligations
+  if obligations[debtor_id][creditor_id] <= Decimal("0.00"):
+    del obligations[debtor_id][creditor_id]
+  
+  
+  if not obligations[debtor_id]:  # If debtor has no more obligations, remove them
+    del obligations[debtor_id]
+
+  return obligations
+
+def get_user_obligations(group, user_id):
+
+  all_obligations = get_group_obligations(group)
+  owes = all_obligations.get(user_id, {})
+
+  owed_by = {}
+
+  for debtor, creditors in all_obligations.items():
+    if user_id in creditors:
+      owed_by[debtor] = creditors[user_id]
+  
+  return{
+    "owes": owes,
+    "owed_by": owed_by
+  }
 
