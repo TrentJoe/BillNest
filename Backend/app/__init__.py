@@ -1,15 +1,17 @@
 from flask import Flask
 from .config import Config
 from .extensions import db, migrate, jwt
+from app.routes.auth_routes import auth_bp
+
 
 def create_app():
-  app = Flask(__name__)
-  app.config.from_object(Config)
+    app = Flask(__name__)
+    app.config.from_object(Config)
 
-  db.init_app(app)
-  migrate.init_app(app, db)
-  jwt.init_app(app)
+    db.init_app(app)
+    migrate.init_app(app, db)
+    jwt.init_app(app)
 
-  from app import models  # Import models to register them with SQLAlchemy
+    from app import models  # Import models to register them with SQLAlchemy
 
-  return app
+    return app
