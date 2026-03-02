@@ -6,6 +6,7 @@ from .expense_split import ExpenseSplit
 from .subscription import Subscription
 from .generated_expenses import GeneratedExpense
 from .settlement import Settlement
+from .Blacklistedtoken import BlacklistedToken
 
 __all__ = [
     "User",
@@ -16,4 +17,5 @@ __all__ = [
     "Subscription",
     "GeneratedExpense",
     "Settlement",
+    "BlacklistedToken",
 ]

@@ -1,5 +1,6 @@
 from app.extensions import db
-from app.models.group import Group, Membership
+from app.models.group import Group
+from app.models.membership import Membership
 
 
 
@@ -66,12 +67,12 @@ def change_member_role(group, user, new_role):
     None
   )
   # check if user is a member of the group
-  if not in membership:
-      raise ValueError("User is not a member of the group")
+  if not membership:
+    raise ValueError("User is not a member of the group")
 
   # check if demoting an admin and if there are other admins in the group
   if membership.role =="admin" and new_role !="admin":
-      admins = [m for m in group.memberships if m.role =="admin"]
+    admins = [m for m in group.memberships if m.role =="admin"]
     if len(admins) == 1:
       raise ValueError("Cannot demote the last admin in the group")
 

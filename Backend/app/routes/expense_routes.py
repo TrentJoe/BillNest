@@ -8,4 +8,5 @@ GET /expenses/<id>
 PUT /expenses/<id>
 
 DELETE /expenses/<id>
+(group admin only for DELETE)
 """
