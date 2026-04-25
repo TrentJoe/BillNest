@@ -1,204 +1,159 @@
 from app.models import *
 from decimal import Decimal
 from app.extensions import db
+from app.models.group import Group
+from app.models.expense import Expense
+from app.models.expense_split import ExpenseSplit
 
 
-def create_expense(
-    group,
-    creator_user,
-    description,
-    total_amount,
-    date,
-    splits=None,
-    split_equally=False,
-):
-    """
-    Create a new expense with its splits.
+def create_expense(group_id, creator_user, description, total_amount, splits=None, split_equally=False, date=None):
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
 
-    Args:
-        group (Group): The group to which the expense belongs.
-        creator_user (User): The user who created the expense.
-        description (str): A description of the expense.
-        total_amount (Decimal): The total amount of the expense.
-        splits (list of dict): A list of splits, where each split is a dict with 'user_id' and 'amount_owed'.
-        date (datetime): The date of the expense.
+  if not description or description.strip() == "":
+    return {"error": "Description cannot be empty"}
 
-    Returns:
-        Expense: The created Expense object.
-    """
+  try:
+    total_amount = Decimal(str(total_amount))
+  except Exception:
+    return {"error": "Invalid total amount"}
 
-    # Validate input data
-    if description is None or description.strip() == "":
-        raise ValueError("Description cannot be empty.")
+  if total_amount <= Decimal("0.00"):
+    return {"error": "Total amount must be greater than zero"}
 
+  creator = next((m for m in group.memberships if m.user_id == creator_user.id), None)
+  if not creator:
+    return {"error": "Creator user must be a member of the group"}
+
+  if split_equally:
+    members = [m.user_id for m in group.memberships]
+    split_amount = (total_amount / Decimal(len(members))).quantize(Decimal("0.01"))
+    splits = [{"user": uid, "amount": split_amount} for uid in members]
+
+  if not splits:
+    return {"error": "Splits are required"}
+
+  split_validation = _validate_splits(group, splits, total_amount)
+  if "error" in split_validation:
+    return split_validation
+
+  new_expense = Expense(
+    group_id=group.id,
+    created_by=creator_user.id,
+    description=description,
+    total_amount=total_amount,
+    date=date,
+  )
+  for split in splits:
+    new_expense.splits.append(
+      ExpenseSplit(user_id=split["user"], amount_owed=split["amount"])
+    )
+  db.session.add(new_expense)
+  db.session.commit()
+  return {"expense_id": new_expense.id}
+
+
+def delete_expense(group_id, expense_id):
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
+  expense = Expense.query.get(expense_id)
+  if not expense or expense.group_id != group_id:
+    return {"error": "Expense not found in group"}
+  db.session.delete(expense)
+  db.session.commit()
+  return {"message": "Expense deleted successfully"}
+
+
+def get_group_expenses(group_id):
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
+  expenses = []
+  for e in group.expenses:
+    expenses.append({
+      "expense_id": e.id,
+      "description": e.description,
+      "total_amount": str(e.total_amount),
+      "date": str(e.date) if e.date else None,
+      "created_by": e.created_by,
+    })
+  return {"expenses": expenses}
+
+
+def get_expense_details(expense_id):
+  expense = Expense.query.get(expense_id)
+  if not expense:
+    return {"error": "Expense not found"}
+  splits = []
+  for s in expense.splits:
+    splits.append({"user_id": s.user_id, "amount_owed": str(s.amount_owed)})
+  return {
+    "expense_id": expense.id,
+    "description": expense.description,
+    "total_amount": str(expense.total_amount),
+    "date": str(expense.date) if expense.date else None,
+    "created_by": expense.created_by,
+    "splits": splits,
+  }
+
+
+def update_expense(group_id, expense_id, current_user, data):
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
+  expense = Expense.query.get(expense_id)
+  if not expense or expense.group_id != group_id:
+    return {"error": "Expense not found in group"}
+
+  description = data.get("description")
+  total_amount = data.get("total_amount")
+  splits = data.get("splits")
+
+  if description is not None:
+    if description.strip() == "":
+      return {"error": "Description cannot be empty"}
+    expense.description = description
+
+  if total_amount is not None:
+    try:
+      total_amount = Decimal(str(total_amount))
+    except Exception:
+      return {"error": "Invalid total amount"}
     if total_amount <= Decimal("0.00"):
-        raise ValueError("Total amount must be greater than zero.")
+      return {"error": "Total amount must be greater than zero"}
+    expense.total_amount = total_amount
 
-    # Validate creator belongs to the group
-    creator = next((m for m in group.memberships if m.user_id == creator_user.id), None)
-    if not creator:
-        raise ValueError("Creator user must be a member of the group.")
-
-    # Auto-generate splits if split_equally is True (overrides any provided splits)
-    if split_equally:
-        members = [m.user_id for m in group.memberships]
-
-        split_amount = (total_amount / decimal(len(member))).quantize(
-            Decimal("0.01")
-        )  # Round to 2 decimal places
-        splits = []
-
-        for user_id in members:
-            splits.append({"user": user_id, "amount": split_amount})
-
-    # Ensure all split users belong to the group
-    validate_split_users(group, splits)
-    # Ensure no duplicate split users
-    validate_no_duplicate_split_users(group, splits)
-    # Ensure split amounts sum to total_amount
-    validate_split_amounts(total_amount, splits)
-    # Create the expense
-    new_expense = Expense(
-        group_id=group.id,
-        created_by=creator_user.id,
-        description=description,
-        total_amount=total_amount,
-        date=date,
-    )
-    # Create ExpenseSplit entries for each split
+  if splits is not None:
+    split_validation = _validate_splits(group, splits, expense.total_amount)
+    if "error" in split_validation:
+      return split_validation
+    expense.splits.clear()
     for split in splits:
-        new_expense.splits.append(
-            ExpenseSplit(user_id=split["user"], amount_owed=split["amount"])
-        )
+      expense.splits.append(
+        ExpenseSplit(user_id=split["user"], amount_owed=split["amount"])
+      )
 
-    return new_expense
-
-
-def delete_expense(group, expense, requesting_user):
-    """
-    Delete an expense if the requesting user is the admin.
-
-    Args:
-        expense (Expense): The expense to be deleted.
-        requesting_user (User): The user requesting the deletion.
-
-    Returns:
-        bool: True if deletion was successful, False otherwise.
-    """
-
-    # Check requesting user is a member of the group
-    requestor = next(
-        (m for m in group.memberships if m.user_id == requesting_user.id), None
-    )
-    if not requestor:
-        raise ValueError("Requesting user must be a member of the group.")
-
-    # check requesting user is an admin
-    if requestor.role != "admin":
-        raise ValueError("Only admins can delete expenses.")
-
-    # Check if the expense exists
-    expense_to_remove = next((e for e in group.expenses if e.id == expense.id), None)
-    if not expense_to_remove:
-        raise ValueError("Expense does not exist in the group.")
-
-    # If checks pass, delete the expense and its splits (cascade should handle this)
-    db.session.delete(expense_to_remove)
-    # Commit to database and return True if successful
-    db.session.commit()
-    return True
+  db.session.commit()
+  return {
+    "expense_id": expense.id,
+    "description": expense.description,
+    "total_amount": str(expense.total_amount),
+  }
 
 
-def get_group_expenses(group):
-    """
-    Retrieve all expenses for a given group.
-
-    Args:
-        group (Group): The group for which to retrieve expenses.
-    Returns:
-        list of Expense: A list of Expense objects belonging to the group.
-    """
-    # Return the list of expenses for the group (group.expenses should work due to relationship)
-    return group.expenses
-
-
-def get_expense_details(expense):
-    """
-    Retrieve details of a specific expense, including its splits.
-
-    Args:
-        expense (Expense): The expense for which to retrieve details.
-    Returns:
-        Expense: The Expense object with its splits loaded.
-    """
-    if not expense:
-        raise ValueError("Expense not found.")
-
-    return (
-        expense  # Due to relationships, expense.splits will be available when accessed
-    )
-
-
-# Validation helpers (can be used inside the above functions)
-
-
-def validate_split_users(group, splits):
-    """
-    Validate that all users in the splits belong to the group.
-
-    Args:
-        group (Group): The group to check against.
-        splits (list of dict): The list of splits to validate.
-    Raises:
-        ValueError: If any split user does not belong to the group.
-    """
-    for split in splits:
-        user = next((m for m in group.memberships if m.user_id == split["user"]), None)
-        if not user:
-            raise ValueError(
-                f"User with ID {split['user']} in splits does not belong to the group."
-            )
-
-    return True
-
-
-def validate_no_duplicate_split_users(splits):
-    """
-    Validate that there are no duplicate users in the splits.
-
-    Args:
-        splits (list of dict): The list of splits to validate.
-    Raises:
-        ValueError: If there are duplicate users in the splits.
-    """
-    seen = set()
-
-    for split in splits:
-        user_id = split["user"]
-
-        if user_id in seen:
-            raise ValueError(f"Duplicate user with ID {user_id} found in splits.")
-
-        seen.add(user_id)
-
-    return True
-
-
-def validate_split_amounts(total_amount, splits):
-    """
-    Validate that the sum of split amounts equals the total amount.
-
-    Args:
-        total_amount (Decimal): The total amount of the expense.
-        splits (list of dict): The list of splits to validate.
-    Raises:
-        ValueError: If the sum of split amounts does not equal the total amount.
-    """
-    split_total = sum(Decimal(split["amount"]) for split in splits)
-
-    if split_total != total_amount:
-        raise ValueError(
-            f"The sum of split amounts ({split_total}) does not equal the total amount ({total_amount})."
-        )
-
-    return True
+def _validate_splits(group, splits, total_amount):
+  member_ids = {m.user_id for m in group.memberships}
+  seen = set()
+  for split in splits:
+    uid = split["user"]
+    if uid not in member_ids:
+      return {"error": f"User {uid} is not a member of the group"}
+    if uid in seen:
+      return {"error": f"Duplicate user {uid} in splits"}
+    seen.add(uid)
+  split_total = sum(Decimal(str(s["amount"])) for s in splits)
+  if split_total != Decimal(str(total_amount)):
+    return {"error": f"Split amounts ({split_total}) do not equal total amount ({total_amount})"}
+  return {"ok": True}

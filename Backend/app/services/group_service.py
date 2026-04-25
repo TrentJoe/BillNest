@@ -1,87 +1,119 @@
 from app.extensions import db
 from app.models.group import Group
 from app.models.membership import Membership
+from app.models.user import User
 
 
-
-def create_group(name, creator_user):
-  # check name field is not empty
+def create_group(name, description, creator_user_id):
   if not name:
-    raise ValueError("Group name cannot be empty")
-  # create group and add creator as admin member
-  new_group = Group(name = name, created_by = creator_user.id)
-  new_membership = Membership(user_id = creator_user.id, role = "admin")
-  # Add the new membership to the group's memberships relationship
+    return {"error": "Group name cannot be empty"}
+  new_group = Group(name=name, created_by=creator_user_id)
+  new_membership = Membership(user_id=creator_user_id, role="admin")
   new_group.memberships.append(new_membership)
   db.session.add(new_group)
   db.session.commit()
-  return new_group
+  return {"group_id": new_group.id, "name": new_group.name}
 
-def add_user_to_group(group, user, role = "member"):
-  # check role is valid
+
+def get_user_groups(user_id):
+  memberships = Membership.query.filter(Membership.user_id == user_id).all()
+  groups = []
+  for m in memberships:
+    group = Group.query.get(m.group_id)
+    if group:
+      groups.append({"group_id": group.id, "name": group.name, "role": m.role})
+  return {"groups": groups}
+
+
+def get_group_details(group_id):
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
+  members = []
+  for m in group.memberships:
+    user = User.query.get(m.user_id)
+    if user:
+      members.append({"user_id": user.id, "username": user.username, "role": m.role})
+  return {"group_id": group.id, "name": group.name, "members": members}
+
+
+def rename_group(group_id, new_name, description=None):
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
+  if not new_name:
+    return {"error": "Group name cannot be empty"}
+  group.name = new_name
+  db.session.commit()
+  return {"group_id": group.id, "name": group.name}
+
+
+def delete_group(group_id):
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
+  db.session.delete(group)
+  db.session.commit()
+  return {"message": "Group deleted successfully"}
+
+
+def add_user_to_group(group_id, user_id, role="member"):
   if role not in ["member", "admin"]:
-    raise ValueError("Invalid role. Must be 'member' or 'admin'")
+    return {"error": "Invalid role"}
+  group = Group.query.get(group_id)
+  if not group:
+    return {"error": "Group not found"}
+  user = User.query.get(user_id)
+  if not user:
+    return {"error": "User not found"}
+  existing = Membership.query.filter(
+    Membership.group_id == group_id,
+    Membership.user_id == user_id
+  ).first()
+  if existing:
+    return {"error": "User is already a member"}
+  new_membership = Membership(user_id=user_id, group_id=group_id, role=role)
+  db.session.add(new_membership)
+  db.session.commit()
+  return {"user_id": user_id, "group_id": group_id, "role": role}
 
-  # check if user is already a member of the group
-  for membership in group.memberships:
-    if membership.user_id == user.id:
-      raise ValueError("User is already a member of the group")
 
-  # add user to group with specified role
-    new_membership = Membership(user_id = user.id, role = role)
-    group.memberships.append(new_membership)
-    db.session.commit()
-  return new_membership
-  
-
-def remove_user_from_group(group, user):
-  # find the membership for the user in the group
-  membership = next(
-    (m for m in group.memberships if m.user_id == user.id), 
-    None
-  )
-  
-  # check if the user is a member of the group
+def remove_user_from_group(group_id, user_id):
+  membership = Membership.query.filter(
+    Membership.group_id == group_id,
+    Membership.user_id == user_id
+  ).first()
   if not membership:
-    raise ValueError("User is not a member of the group")
-
-  # check if the user is an admin and if there are other admins in the group
+    return {"error": "User is not a member"}
   if membership.role == "admin":
-    admins = [m for m in group.memberships if role =="admin"]
+    admins = Membership.query.filter(
+      Membership.group_id == group_id,
+      Membership.role == "admin"
+    ).all()
     if len(admins) == 1:
-      raise ValueError("Cannot remove the last admin from the group")
-
-  # remove the membership
+      return {"error": "Cannot remove the last admin"}
   db.session.delete(membership)
   db.session.commit()
+  return {"message": "Member removed successfully"}
 
-  return True
 
-def change_member_role(group, user, new_role):
-  # check if new role is valid
+def change_member_role(group_id, user_id, new_role):
   if new_role not in ["member", "admin"]:
-    raise ValueError("Invalid role. Must be 'member' or 'admin'")
-
-  membership = next(
-    (m for m in group.memberships if m.user_id == user.id),
-    None
-  )
-  # check if user is a member of the group
+    return {"error": "Invalid role"}
+  membership = Membership.query.filter(
+    Membership.group_id == group_id,
+    Membership.user_id == user_id
+  ).first()
   if not membership:
-    raise ValueError("User is not a member of the group")
-
-  # check if demoting an admin and if there are other admins in the group
-  if membership.role =="admin" and new_role !="admin":
-    admins = [m for m in group.memberships if m.role =="admin"]
+    return {"error": "User is not a member"}
+  if membership.role == "admin" and new_role != "admin":
+    admins = Membership.query.filter(
+      Membership.group_id == group_id,
+      Membership.role == "admin"
+    ).all()
     if len(admins) == 1:
-      raise ValueError("Cannot demote the last admin in the group")
-
-  # update the role
+      return {"error": "Cannot demote the last admin"}
   membership.role = new_role
   db.session.commit()
-
-  return membership
-
-def get_user_groups(user):
-  return [membership.group for membership in user.memberships]
+  return {"user_id": user_id, "group_id": group_id, "role": new_role}
 

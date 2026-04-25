@@ -1,11 +1,17 @@
+"""
+POST   /groups                          - Create a group
+GET    /groups                          - Get all groups for current user
+GET    /groups/<group_id>               - Get group details
+PUT    /groups/<group_id>               - Rename a group (admin only)
+DELETE /groups/<group_id>               - Delete a group (admin only)
+POST   /groups/<group_id>/members       - Add a member (admin only)
+DELETE /groups/<group_id>/members/<id>  - Remove a member (admin only)
+"""
+
 from flask import Blueprint, jsonify, request
 from app.services import group_service
 from app.utils.auth_decorator import token_required
 from app.utils.group_authorisation import group_member_required, group_admin_required
-from app.extensions import db
-from app.models.group import Group
-from app.models.membership import Membership
-from app.models.user import User
 
 
 group_bp = Blueprint("group", __name__)
@@ -14,75 +20,54 @@ group_bp = Blueprint("group", __name__)
 @token_required
 def get_groups(current_user):
 
-  memberships = Membership.query.filter(Membership.user_id == current_user.id).all()
+  groups = group_service.get_user_groups(current_user.id)
 
-  result = []
-  for m in memberships:
-    group = Group.query.get(m.group_id)
-    result.append({
-      "id":group.id,
-      "name" : group.name,
-      "role": m.role
-    })
-  return jsonify({"groups": result}), 200
+  if "error" in groups:
+    return jsonify({"message": groups["error"]}), 400
+  
+  return jsonify({"groups": groups["groups"]}), 200
 
 @group_bp.route("/groups/<int:group_id>", methods = ["GET"])
 @token_required
 @group_member_required
 def get_group_details(current_user, group_id):
-  group = Group.query.get(group_id)
+  group_details = group_service.get_group_details(group_id)
 
-  if not group:
-    return jsonify({"error": "Group not found"}), 404
-  
-  memberships = Membership.query.filter(Membership.group_id == group_id).all()
-
-  members = []
-  for m in memberships:
-    user = User.query.get(m.user_id)
-    members.append({
-      "id": user.id,
-      "name": user.name,
-      "email": user.email,
-      "role": m.role
-    })
+  if "error" in group_details:
+    return jsonify({"message": group_details["error"]}), 400
 
   return jsonify({
-    "id": group.id,
-    "name": group.name,
-    "members": members
+    "id": group_details["group_id"],
+    "name": group_details["name"],
+    "members": group_details["members"]
   }), 200
 
 
 @group_bp.route("/groups", methods=["POST"])
 @token_required
 def create_group(current_user):
-  data = request.get_json()
+  data = request.get_json(silent=True)
+  if not data:
+    return jsonify({"error": "Invalid JSON data"}), 400
+  
   name = data.get("name")
   description = data.get("description")
 
   if not name:
     return jsonify({"error": "Group name is required"}), 400
 
-  new_group = Group(name=name, 
+  new_group = group_service.create_group(
+    name = name,
     description = description,
-    created_by = current_user.id)
-  db.session.add(new_group)
-  db.session.flush()  # Flush to get the new group ID
-
-  # Add creator as admin member
-  membership = Membership(
-    user_id = current_user.id,
-    group_id = new_group.id,
-    role = "admin"
+    creator_user_id = current_user.id
   )
 
-  db.session.add(membership)
-  db.session.commit()
+  if "error" in new_group:
+    return jsonify({"error": new_group["error"]}), 400
 
   return jsonify({
-    "id": new_group.id,
-    "name": new_group.name,
+    "id": new_group["group_id"],
+    "name": new_group["name"],
   }),201
 
 
@@ -91,74 +76,55 @@ def create_group(current_user):
 @group_admin_required
 def rename_group(current_user, group_id):
 
-  data = request.get_json()
+  data = request.get_json(silent=True)
+  if not data:
+    return jsonify({"error": "Invalid JSON data"}), 400
   new_name = data.get("name")
+  description = data.get("description")
 
-  group = Group.query.get(group_id)
+  if not new_name:
+    return jsonify({"error": "Group name is required"}), 400
+  
+  group = group_service.rename_group(group_id, new_name, description)
 
-  if not group:
-    return jsonify({"error": "Group not found"}), 404
-
-  if new_name:
-    group.name = new_name
-
-  db.session.commit()
+  if "error" in group:
+    return jsonify({"error": group["error"]}), 400
 
   return jsonify({
-    "id": group.id,
-    "name": group.name
+    "id": group["group_id"],
+    "name": group["name"]
   }), 200
 
 @group_bp.route("/groups/<int:group_id>/members", methods = ["POST"])
 @token_required
 @group_admin_required
 def add_member(current_user, group_id):
-  data = request.get_json()
-  email = data.get("email")
+  data = request.get_json(silent=True)
+  if not data:
+    return jsonify({"error": "Invalid JSON data"}), 400
 
-  if not email:
-    return jsonify({"error": "Email is required"}), 400
+  user_id = data.get("user_id")
+  if not user_id:
+    return jsonify({"error": "User ID is required"}), 400
   
-  user = User.query.filter(User.email == email).first()
-
-  if not user:
-    return jsonify({"error": "User not found"}), 404
+  role = data.get("role", "member")
   
-  existing_membership = Membership.query.filter(
-    Membership.user_id == user.id,
-    Membership.group_id == group_id
-  ).first()
+  result = group_service.add_user_to_group(group_id, user_id, role)
 
-  if existing_membership:
-    return jsonify({"error": "User is already a member of this group"}), 400
+  if "error" in result:
+    return jsonify({"error": result["error"]}), 400
 
-  new_membership = Membership(
-    user_id = user.id,
-    group_id = group_id,
-    role = "member"
-  )
-
-  db.session.add(new_membership)
-  db.session.commit()
-
-  return jsonify({
-    "message": f"{user.name} added to group successfully"}), 201
+  return jsonify({"message": "Member added to group successfully"}), 201
 
 @group_bp.route("/groups/<int:group_id>/members/<int:user_id>", methods = ["DELETE"])
 @token_required
 @group_admin_required
 def remove_member(current_user, group_id, user_id):
 
-  membership = Membership.query.filter(
-    Membership.user_id == user_id,
-    Membership.group_id == group_id
-  ).first()
+  result = group_service.remove_user_from_group(group_id, user_id)
 
-  if not membership:
-    return jsonify({"error": "Membership not found"}), 404
-  
-  db.session.delete(membership)
-  db.session.commit()
+  if "error" in result:
+    return jsonify({"error": result["error"]}), 400
 
   return jsonify({"message": "Member removed from group successfully"}), 200
 
@@ -166,13 +132,10 @@ def remove_member(current_user, group_id, user_id):
 @token_required
 @group_admin_required
 def delete_group(current_user, group_id):
-  group = Group.query.get(group_id)
+  group = group_service.delete_group(group_id)
 
-  if not Group:
-    return jsonify({"error": "Group not found"}), 404
-
-  db.session.delete(group)
-  db.session.commit()
+  if "error" in group:
+    return jsonify({"error": group["error"]}), 400 
 
   return jsonify({"message": "Group deleted successfully"}), 200
   

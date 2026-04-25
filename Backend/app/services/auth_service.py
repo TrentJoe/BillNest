@@ -1,65 +1,90 @@
 from app.extensions import db
 from app.models.user import User
-from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
-import uuid
 from datetime import datetime, timedelta
 from flask import current_app
 from app.models.Blacklistedtoken import BlacklistedToken
 
 
-def register_user(name, email, password):
-  if not email and not password:
-    raise ValueError("Email and password are required")
+def register_user(username, email, password):
+  if not email or not password:
+    return {"error": "Email and password are required"}
   
   existing_user = User.query.filter(User.email == email).first()
-
   if existing_user:
-    raise ValueError("Email is already registered")
+    return {"error": "Email already registered"}
   
-  password_hash = generate_password_hash(password)
+  # Check if username already exists
+  existing_username = User.query.filter(User.name == username).first()
+  if existing_username:
+    return {"error": "Username already taken"}
 
-  new_user = User(
-    name = name,
-    email = email,
-    password_hash = password_hash
-  )
+  # Create and save the new user
+  user = User(name=username, email=email)
+  user.set_password(password)
 
-  db.session.add(new_user)
+  db.session.add(user)
   db.session.commit()
 
-  return new_user
+  return {"user_id": user.id}
 
 
 def login_user(email, password):
 
-  if not email or not password:
-    raise ValueError("Email and password are required")
-  
   user = User.query.filter(User.email == email).first()
 
-  if not user or not check_password_hash(user.password_hash, password):
-    raise ValueError("Invalid email or password")
-  
+  # Check user exists and password is correct
+  if not user or not user.check_password(password):
+    return {"error": "Invalid email or password"}
+
+  # Generate JWT token
   token = jwt.encode(
     {
       "user_id": user.id,
-      "jti": str(uuid.uuid4()),
-      "exp": datetime.utcnow() + timedelta(hours=2)
+      "exp": datetime.utcnow() + timedelta(hours=24)
     },
     current_app.config["SECRET_KEY"],
     algorithm="HS256"
   )
 
-  return token
+  return {"token": token}
 
 
-def logout_user(jti):
-  # Blacklist the token by adding its jti to the BlacklistedToken table
-  blacklist_token(jti)
+def logout_user(token):
+  try:
+    # Decode to get the jti (JWT ID) from the token
+    decoded = jwt.decode(
+      token,
+      current_app.config["SECRET_KEY"],
+      algorithms=["HS256"]
+    )
+
+    # Check if already blacklisted
+    existing = BlacklistedToken.query.filter(
+      BlacklistedToken.jti == str(decoded["user_id"])
+    ).first()
+
+    if existing:
+      return {"error": "Token already blacklisted"}
+
+    # Add to blacklist
+    blacklisted = BlacklistedToken(jti=str(decoded["user_id"]))
+    db.session.add(blacklisted)
+    db.session.commit()
+
+    return {"message": "Successfully logged out"}
+
+  except jwt.ExpiredSignatureError:
+    return {"error": "Token has expired"}
+  except jwt.InvalidTokenError:
+    return {"error": "Invalid token"}
 
 
 def blacklist_token(jti):
+  """
+  Directly blacklists a token by its JTI.
+  Used internally by the auth decorator.
+  """
   blacklisted = BlacklistedToken(jti=jti)
   db.session.add(blacklisted)
   db.session.commit()
